@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Lyrically",
+  "description": "Lyrics, wherever you listen. See synced lyrics as a floating overlay on any tab while music plays on YouTube Music or YouTube.",
+  "version": "0.1.0",
+
+  "permissions": ["storage", "tabs"],
+
+  "host_permissions": [
+    "https://music.youtube.com/*",
+    "https://www.youtube.com/*"
+  ],
+
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://music.youtube.com/*",
+        "https://www.youtube.com/*"
+      ],
+      "js": ["content/detector-combined.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/overlay.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "Lyrically — Lyrics overlay"
+  },
+
+  "icons": {}
+}
