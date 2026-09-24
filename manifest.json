@@ -4,11 +4,12 @@
   "description": "Lyrics, wherever you listen. See synced lyrics as a floating overlay on any tab while music plays on YouTube Music or YouTube.",
   "version": "0.1.0",
 
-  "permissions": ["storage", "tabs"],
+  "permissions": ["storage", "tabs", "activeTab", "scripting"],
 
   "host_permissions": [
     "https://music.youtube.com/*",
-    "https://www.youtube.com/*"
+    "https://www.youtube.com/*",
+    "https://youtube.com/*"
   ],
 
   "background": {
@@ -17,23 +18,40 @@
 
   "content_scripts": [
     {
-      "matches": [
-        "https://music.youtube.com/*",
-        "https://www.youtube.com/*"
+      "matches": ["https://music.youtube.com/*"],
+      "js": [
+        "content/adapters/youtube-music.js",
+        "content/detector-core.js"
       ],
-      "js": ["content/detector-combined.js"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": false,
+      "match_origin_as_fallback": false
     },
     {
-      "matches": ["<all_urls>"],
-      "js": ["content/overlay.js"],
-      "run_at": "document_idle"
+      "matches": ["https://www.youtube.com/*", "https://youtube.com/*"],
+      "exclude_matches": ["https://music.youtube.com/*"],
+      "js": [
+        "content/adapters/youtube.js",
+        "content/detector-core.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": false,
+      "match_origin_as_fallback": false
     }
   ],
 
   "action": {
     "default_popup": "popup/popup.html",
     "default_title": "Lyrically — Lyrics overlay"
+  },
+
+  "commands": {
+    "toggle_overlay": {
+      "suggested_key": {
+        "default": "Alt+L"
+      },
+      "description": "Toggle Lyrics Overlay"
+    }
   },
 
   "icons": {}

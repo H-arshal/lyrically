@@ -1,3 +1,0 @@
-// Customization panel: font, size, weight, bg, opacity + presets
-const panel = document.createElement('div');
-// ... styling controls ...

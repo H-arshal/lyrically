@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <title>Lyrically</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
     * {
       box-sizing: border-box;
@@ -48,6 +47,54 @@
       font-size: 15px;
       font-weight: 700;
       letter-spacing: -0.3px;
+      flex: 1;
+    }
+
+    .master-switch {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .master-switch-label {
+      font-size: 11px;
+      font-weight: 700;
+      color: rgba(255,255,255,0.4);
+      transition: color 0.2s;
+    }
+
+    .master-switch.active .master-switch-label {
+      color: #22c55e;
+    }
+
+    .toggle-track {
+      width: 36px;
+      height: 20px;
+      border-radius: 10px;
+      background: rgba(255,255,255,0.1);
+      position: relative;
+      transition: background 0.2s;
+    }
+
+    .master-switch.active .toggle-track {
+      background: #22c55e;
+    }
+
+    .toggle-thumb {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #fff;
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .master-switch.active .toggle-thumb {
+      transform: translateX(16px);
     }
 
     .popup-body {
@@ -137,16 +184,113 @@
     .popup-idle-msg strong {
       color: rgba(255,255,255,0.55);
     }
+    .popup-settings {
+      padding: 0 18px 16px;
+      border-top: 1px solid rgba(255,255,255,0.06);
+      margin-top: 4px;
+      padding-top: 16px;
+    }
+
+    .setting-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+      font-size: 12px;
+      color: rgba(255,255,255,0.7);
+    }
+
+    .setting-row:last-child {
+      margin-bottom: 0;
+    }
+
+    .setting-row label {
+      flex: 1;
+    }
+
+    .setting-row input[type="range"] {
+      width: 100px;
+      accent-color: #a855f7;
+    }
+
+    .setting-row select {
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 4px;
+      padding: 4px 6px;
+      font-size: 11px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .setting-bg {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .setting-bg input[type="color"] {
+      width: 24px;
+      height: 24px;
+      border: none;
+      border-radius: 4px;
+      background: none;
+      cursor: pointer;
+      padding: 0;
+    }
   </style>
 </head>
 <body>
   <div class="popup-header">
     <div class="popup-logo">♪</div>
     <div class="popup-brand">Lyrically</div>
+    <div class="master-switch active" id="master-switch">
+      <span class="master-switch-label" id="master-switch-label">ON</span>
+      <div class="toggle-track">
+        <div class="toggle-thumb"></div>
+      </div>
+    </div>
   </div>
   <div class="popup-body" id="popup-body">
     <div class="popup-idle-msg">
       Play a song on <strong>YouTube Music</strong> or <strong>YouTube</strong> to get started.
+    </div>
+  </div>
+  <div class="popup-settings">
+    <div class="popup-label">Customization</div>
+    
+    <div class="setting-row">
+      <label>Size</label>
+      <input type="range" id="setting-size" min="10" max="32" value="14">
+      <span id="label-size" style="width:24px;text-align:right;opacity:0.6;">14</span>
+    </div>
+    
+    <div class="setting-row">
+      <label>Weight</label>
+      <select id="setting-weight">
+        <option value="400">Regular</option>
+        <option value="500">Medium</option>
+        <option value="600" selected>Semi-bold</option>
+        <option value="700">Bold</option>
+      </select>
+    </div>
+
+    <div class="setting-row">
+      <label>Align</label>
+      <select id="setting-alignment">
+        <option value="left" selected>Left</option>
+        <option value="center">Center</option>
+      </select>
+    </div>
+
+    <div class="setting-row">
+      <label>Background</label>
+      <div class="setting-bg">
+        <input type="color" id="setting-bgcolor" value="#0f0f14">
+        <input type="range" id="setting-bgopacity" min="0" max="100" value="82" title="Opacity">
+        <span id="label-bgopacity" style="width:24px;text-align:right;opacity:0.6;">82</span>
+      </div>
     </div>
   </div>
   <script src="popup.js"></script>

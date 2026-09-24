@@ -37,11 +37,15 @@
   // ── Styles ─────────────────────────────────────────────────────────────────
   const styles = document.createElement('style');
   styles.textContent = `
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
     :host {
       all: initial;
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --font-size: 14px;
+      --font-weight: 600;
+      --alignment: left;
+      --bg-color: 15, 15, 20;
+      --bg-opacity: 0.82;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     }
 
     * {
@@ -55,7 +59,7 @@
       width: ${OVERLAY_WIDTH}px;
       height: ${OVERLAY_HEIGHT}px;
       border-radius: 16px;
-      background: rgba(15, 15, 20, 0.82);
+      background: rgba(var(--bg-color), var(--bg-opacity));
       backdrop-filter: blur(24px) saturate(1.4);
       -webkit-backdrop-filter: blur(24px) saturate(1.4);
       border: 1px solid rgba(255, 255, 255, 0.08);
@@ -191,9 +195,10 @@
 
     /* ── Lyric lines (synced) ── */
     .lyrically-line {
-      font-size: 14px;
+      font-size: var(--font-size);
       line-height: 1.85;
       color: rgba(255, 255, 255, 0.28);
+      text-align: var(--alignment);
       transition: color 0.3s ease, transform 0.3s ease, font-weight 0.3s ease;
       padding: 2px 0;
       transform: scale(1);
@@ -201,9 +206,9 @@
 
     .lyrically-line.active {
       color: #f0f0f5;
-      font-weight: 600;
+      font-weight: var(--font-weight);
       transform: scale(1.02);
-      transform-origin: left center;
+      transform-origin: var(--alignment) center;
     }
 
     .lyrically-line.passed {
@@ -212,9 +217,10 @@
 
     /* ── Plain text ── */
     .lyrically-plain {
-      font-size: 13.5px;
+      font-size: var(--font-size);
       line-height: 1.9;
       color: rgba(255, 255, 255, 0.72);
+      text-align: var(--alignment);
       white-space: pre-wrap;
       word-break: break-word;
     }
@@ -344,13 +350,17 @@
   const closeBtn = shadow.getElementById('lyrically-close');
   const dragHandle = shadow.getElementById('lyrically-drag-handle');
 
+  let globalEnabled = true;
+
   // ── Restore position ───────────────────────────────────────────────────────
-  chrome.storage.local.get([STORAGE_KEY_POSITION, STORAGE_KEY_VISIBLE], (data) => {
+  chrome.storage.local.get([STORAGE_KEY_POSITION, STORAGE_KEY_VISIBLE, 'lyrically:enabled'], (data) => {
     const pos = data[STORAGE_KEY_POSITION] || DEFAULT_POS;
     panel.style.left = Math.min(pos.x, window.innerWidth - 60) + 'px';
     panel.style.top = Math.min(pos.y, window.innerHeight - 60) + 'px';
 
-    if (data[STORAGE_KEY_VISIBLE] === false) {
+    globalEnabled = data['lyrically:enabled'] !== false;
+
+    if (data[STORAGE_KEY_VISIBLE] === false || !globalEnabled) {
       state.visible = false;
       panel.classList.add('hidden');
     }
@@ -394,6 +404,28 @@
     chrome.storage.local.set({
       [STORAGE_KEY_POSITION]: { x: rect.left, y: rect.top }
     });
+  });
+
+  // ── Off-screen recovery ────────────────────────────────────────────────────
+  window.addEventListener('resize', () => {
+    if (!state.visible) return;
+    const rect = panel.getBoundingClientRect();
+    let newX = rect.left;
+    let newY = rect.top;
+    let adjusted = false;
+
+    if (rect.right > window.innerWidth) { newX = window.innerWidth - OVERLAY_WIDTH - 20; adjusted = true; }
+    if (rect.bottom > window.innerHeight) { newY = window.innerHeight - OVERLAY_HEIGHT - 20; adjusted = true; }
+    if (newX < 0) { newX = 20; adjusted = true; }
+    if (newY < 0) { newY = 20; adjusted = true; }
+
+    if (adjusted) {
+      panel.style.left = newX + 'px';
+      panel.style.top = newY + 'px';
+      chrome.storage.local.set({
+        [STORAGE_KEY_POSITION]: { x: newX, y: newY }
+      });
+    }
   });
 
   // ── Minimize / Close ───────────────────────────────────────────────────────
@@ -456,12 +488,23 @@
       return;
     }
 
-    if (status === 'not_found' || status === 'error') {
+    if (status === 'not_found') {
       bodyEl.innerHTML = `
         <div class="lyrically-status">
           <div class="lyrically-status-icon">🔍</div>
           <div class="lyrically-status-text">
             Lyrics not found for<br><strong>${escapeHTML(title || 'this track')}</strong>
+          </div>
+        </div>`;
+      return;
+    }
+
+    if (status === 'error') {
+      bodyEl.innerHTML = `
+        <div class="lyrically-status">
+          <div class="lyrically-status-icon">⚠️</div>
+          <div class="lyrically-status-text">
+            Connection error.<br><strong>Could not reach lyrics server.</strong>
           </div>
         </div>`;
       return;
@@ -493,27 +536,41 @@
     const t = state.currentTime;
     let activeIdx = -1;
 
-    // Find the last line whose timestamp <= currentTime
-    for (let i = renderedLines.length - 1; i >= 0; i--) {
-      if (renderedLines[i].time <= t) {
-        activeIdx = i;
-        break;
+    // Find the last line whose timestamp <= currentTime (Binary Search)
+    let left = 0;
+    let right = renderedLines.length - 1;
+    while (left <= right) {
+      const mid = (left + right) >> 1;
+      if (renderedLines[mid].time <= t) {
+        activeIdx = mid;
+        left = mid + 1;
+      } else {
+        right = mid - 1;
       }
     }
 
     if (activeIdx === lastActiveIdx) return;
-    lastActiveIdx = activeIdx;
-
-    for (let i = 0; i < renderedLines.length; i++) {
-      const el = renderedLines[i].el;
-      el.classList.remove('active', 'passed');
-
-      if (i === activeIdx) {
-        el.classList.add('active');
-      } else if (i < activeIdx) {
-        el.classList.add('passed');
+    
+    // Fast path: sequential line advance
+    if (activeIdx === lastActiveIdx + 1) {
+      if (lastActiveIdx >= 0 && renderedLines[lastActiveIdx]) {
+        renderedLines[lastActiveIdx].el.classList.remove('active');
+        renderedLines[lastActiveIdx].el.classList.add('passed');
+      }
+      if (activeIdx >= 0 && renderedLines[activeIdx]) {
+        renderedLines[activeIdx].el.classList.add('active');
+      }
+    } else {
+      // Scrubbing fallback
+      for (let i = 0; i < renderedLines.length; i++) {
+        const el = renderedLines[i].el;
+        el.classList.remove('active', 'passed');
+        if (i === activeIdx) el.classList.add('active');
+        else if (i < activeIdx) el.classList.add('passed');
       }
     }
+
+    lastActiveIdx = activeIdx;
 
     // Auto-scroll to active line
     if (activeIdx >= 0 && renderedLines[activeIdx]) {
@@ -537,6 +594,14 @@
 
   // ── Message listener ───────────────────────────────────────────────────────
   chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === 'POSITION_UPDATE') {
+      state.currentTime = msg.payload.currentTime;
+      if (state.lyrics?.type === 'synced') {
+        syncHighlight();
+      }
+      return;
+    }
+
     if (msg.type === 'LYRICS_STATE') {
       const prev = state.status;
       const prevTrack = `${state.artist}::${state.title}`;
@@ -557,17 +622,11 @@
       }
 
       // Show overlay when music starts playing
-      if (!state.visible && state.status !== 'idle') {
+      if (!state.visible && state.status !== 'idle' && globalEnabled) {
         state.visible = true;
         panel.classList.remove('hidden');
         chrome.storage.local.set({ [STORAGE_KEY_VISIBLE]: true });
       }
-    }
-
-    if (msg.type === 'TOGGLE_OVERLAY') {
-      state.visible = !state.visible;
-      panel.classList.toggle('hidden', !state.visible);
-      chrome.storage.local.set({ [STORAGE_KEY_VISIBLE]: state.visible });
     }
   });
 
@@ -584,9 +643,59 @@
       state.status = res.status;
       renderLyrics();
 
-      if (!state.visible) {
+      if (!state.visible && globalEnabled) {
         state.visible = true;
         panel.classList.remove('hidden');
+      }
+    }
+  });
+
+  // ── Customization ──────────────────────────────────────────────────────────
+  const STORAGE_KEY_CUSTOMIZATION = 'lyrically:customization';
+  
+  const defaultCustomization = {
+    fontSize: 14,
+    fontWeight: 600,
+    alignment: 'left',
+    bgColor: '15, 15, 20',
+    bgOpacity: 0.82
+  };
+
+  function applyCustomization(prefs) {
+    if (!prefs) return;
+    panel.style.setProperty('--font-size', `${prefs.fontSize}px`);
+    panel.style.setProperty('--font-weight', prefs.fontWeight);
+    panel.style.setProperty('--alignment', prefs.alignment);
+    panel.style.setProperty('--bg-color', prefs.bgColor);
+    panel.style.setProperty('--bg-opacity', prefs.bgOpacity);
+  }
+
+  chrome.storage.local.get([STORAGE_KEY_CUSTOMIZATION], (data) => {
+    applyCustomization(data[STORAGE_KEY_CUSTOMIZATION] || defaultCustomization);
+  });
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local') {
+      if (changes[STORAGE_KEY_CUSTOMIZATION]) {
+        applyCustomization(changes[STORAGE_KEY_CUSTOMIZATION].newValue || defaultCustomization);
+      }
+      if (changes['lyrically:enabled']) {
+        globalEnabled = changes['lyrically:enabled'].newValue !== false;
+        if (!globalEnabled) {
+          state.visible = false;
+          panel.classList.add('hidden');
+        } else {
+          chrome.runtime.sendMessage({ type: 'GET_STATE' }, (res) => {
+            if (res && res.status !== 'idle' && !state.visible) {
+              state.visible = true;
+              panel.classList.remove('hidden');
+            }
+          });
+        }
+      }
+      if (changes[STORAGE_KEY_VISIBLE] && globalEnabled) {
+        state.visible = changes[STORAGE_KEY_VISIBLE].newValue;
+        panel.classList.toggle('hidden', !state.visible);
       }
     }
   });
