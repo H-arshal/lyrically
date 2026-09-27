@@ -70,24 +70,30 @@
       <button class="popup-btn" id="toggle-btn">Toggle Overlay</button>
     `;
 
-    document.getElementById('toggle-btn').addEventListener('click', () => {
-      chrome.storage.local.get(['lyrically:overlay:visible'], async (data) => {
-        const isVisible = data['lyrically:overlay:visible'] !== false;
-        if (!isVisible) {
-          try {
-            const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-            if (tab && !tab.url.startsWith('chrome://')) {
-              await chrome.scripting.executeScript({
-                target: { tabId: tab.id },
-                files: ['content/overlay.js']
-              });
-            }
-          } catch (e) {
-            console.warn('[Lyrically] Could not inject overlay:', e);
-          }
+    document.getElementById('toggle-btn').addEventListener('click', async () => {
+      try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab || tab.url.startsWith('chrome://')) return;
+
+        let overlayState = null;
+        try {
+          overlayState = await chrome.tabs.sendMessage(tab.id, { type: 'PING_OVERLAY' });
+        } catch(e) {}
+
+        if (!overlayState || !overlayState.injected) {
+          // Not injected on this tab yet. Inject it and ensure visibility is ON.
+          await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ['content/overlay.js']
+          });
+          chrome.storage.local.set({ 'lyrically:overlay:visible': true });
+        } else {
+          // Already injected. Toggle it off if visible, on if hidden.
+          chrome.storage.local.set({ 'lyrically:overlay:visible': !overlayState.visible });
         }
-        chrome.storage.local.set({ 'lyrically:overlay:visible': !isVisible });
-      });
+      } catch (e) {
+        console.warn('[Lyrically] Could not toggle overlay:', e);
+      }
     });
   }
 

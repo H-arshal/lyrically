@@ -1,11 +1,17 @@
+import {
+  buildLookupQueries,
+  makeResolution,
+  normalizeText,
+  normalizeTrackMetadata,
+  rankLyricsCandidates
+} from './song-resolver.js';
+
 // Service worker: state hub, lyrics lookup, cross-tab broadcast
 
-// ── Lyrics Engine (inlined — importScripts path resolution is unreliable in MV3) ──
-
+// ── Lyrics Engine / Song Resolution V2 ───────────────────────────────────────
 /**
- * Parse LRC-formatted lyrics into an array of { time, text } objects.
- * LRC lines look like: [mm:ss.xx] Some lyric text
- * Returns sorted array by timestamp.
+ * Lyrically V2 lyrics resolver.
+ * The resolver separates song identity from lyrics quality.
  */
 function parseLRC(lrcString) {
   if (!lrcString || typeof lrcString !== 'string') return [];
@@ -21,10 +27,11 @@ function parseLRC(lrcString) {
     while ((match = timestampRegex.exec(line)) !== null) {
       const minutes = parseInt(match[1], 10);
       const seconds = parseInt(match[2], 10);
-      const centiseconds = match[3] ? parseInt(match[3].padEnd(3, '0'), 10) / 1000 : 0;
-      const time = minutes * 60 + seconds + centiseconds;
-
-      parsed.push({ time, text: textPart });
+      const fraction = match[3] ? parseInt(match[3].padEnd(3, '0'), 10) / 1000 : 0;
+      parsed.push({
+        time: minutes * 60 + seconds + fraction,
+        text: textPart
+      });
     }
   }
 
@@ -32,40 +39,44 @@ function parseLRC(lrcString) {
   return parsed;
 }
 
-/**
- * Fetch lyrics for a given artist + title.
- * Returns: { type: 'synced'|'plain'|'not_found', lines: [{time, text}]|null, plainText: string|null }
- */
-/**
- * Score search results to pick the best match.
- * Strongly prefers synced lyrics, then penalizes based on duration difference.
- */
-function scoreLyricsResults(results, duration) {
-  let bestMatch = null;
-  let bestScore = -1;
+function processLyricsData(data, resolution) {
+  if (!data) return null;
 
-  for (const entry of results.slice(0, 10)) {
-    let score = 0;
-    if (entry.syncedLyrics) score += 100;
-    if (entry.plainLyrics) score += 10;
-    if (duration && entry.duration) {
-      const diff = Math.abs(entry.duration - duration);
-      if (diff < 3) score += 50;
-      else if (diff < 10) score += 20;
-    }
-    if (score > bestScore) {
-      bestScore = score;
-      bestMatch = entry;
-    }
+  if (data.syncedLyrics) {
+    const lines = parseLRC(data.syncedLyrics);
+    return {
+      type: 'synced',
+      lines,
+      plainText: data.plainLyrics || lines.map((line) => line.text).join('\n'),
+      resolution
+    };
   }
 
-  return bestMatch;
+  if (data.plainLyrics) {
+    return {
+      type: 'plain',
+      lines: null,
+      plainText: data.plainLyrics,
+      resolution
+    };
+  }
+
+  return null;
 }
 
-async function fetchLyrics(artist, title, duration) {
-  const cacheKey = `lyrics:${artist.toLowerCase()}:${title.toLowerCase()}`;
+async function fetchLyrics(artist, title, duration, platform = 'youtube') {
+  const metadata = normalizeTrackMetadata({
+    platform,
+    title,
+    artist,
+    duration
+  });
 
-  // Check cache first
+  // The cache follows normalized input rather than the raw YouTube title.
+  // Duration is bucketed so tiny player-duration changes do not create new keys.
+  const durationBucket = duration ? Math.round(Number(duration) / 5) * 5 : 0;
+  const cacheKey = `lyrics:v2:${metadata.source}:${normalizeText(title)}:${normalizeText(artist)}:${durationBucket}`;
+
   try {
     const cached = await chrome.storage.local.get(cacheKey);
     if (cached[cacheKey] && cached[cacheKey].expires > Date.now()) {
@@ -75,122 +86,109 @@ async function fetchLyrics(artist, title, duration) {
     console.warn('[Lyrically] Cache read failed:', e);
   }
 
-  // Clean title for better API matching (remove YouTube noise)
-  const cleanTitle = title
-    .replace(/\s*\(Official\s*(Music\s*)?Video\)/gi, '')
-    .replace(/\s*\[Official\s*(Music\s*)?Video\]/gi, '')
-    .replace(/\s*\(Official\s*Audio\)/gi, '')
-    .replace(/\s*\[Official\s*Audio\]/gi, '')
-    .replace(/\s*\(Lyric\s*Video\)/gi, '')
-    .replace(/\s*\[Lyric\s*Video\]/gi, '')
-    .replace(/\s*\(Lyrics?\)/gi, '')
-    .replace(/\s*\[Lyrics?\]/gi, '')
-    .replace(/\s*\|\s*Lyrics?$/gi, '')
-    .replace(/\s*\(HD\)/gi, '')
-    .replace(/\s*\[HD\]/gi, '')
-    .replace(/\s*\(HQ\)/gi, '')
-    .replace(/\s*\[HQ\]/gi, '')
-    .replace(/\s*\(4K\)/gi, '')
-    .replace(/\s*\[4K\]/gi, '')
-    .replace(/\s*\(Audio\)/gi, '')
-    .replace(/\s*\[Audio\]/gi, '')
-    .replace(/\s*\(ft\.?\s*.+\)/gi, '')  // Remove feat. in parens
-    .replace(/\s*\[ft\.?\s*.+\]/gi, '')
-    .replace(/\s*\(feat\.?\s*.+\)/gi, '')
-    .replace(/\s*\[feat\.?\s*.+\]/gi, '')
-    .trim();
-
   const headers = {
-    'User-Agent': 'Lyrically/0.1.0 (https://github.com/lyrically-extension)',
-    'Lrclib-Client': 'Lyrically/0.1.0'
+    'User-Agent': 'Lyrically/0.2.0 (https://github.com/lyrically-extension)',
+    'Lrclib-Client': 'Lyrically/0.2.0'
   };
 
-  let result = { type: 'not_found', lines: null, plainText: null };
-
-  const processData = (data) => {
-    if (data.syncedLyrics) {
-      const lines = parseLRC(data.syncedLyrics);
-      return {
-        type: 'synced',
-        lines,
-        plainText: data.plainLyrics || lines.map(l => l.text).join('\n')
-      };
-    } else if (data.plainLyrics) {
-      return {
-        type: 'plain',
-        lines: null,
-        plainText: data.plainLyrics
-      };
+  let result = {
+    type: 'not_found',
+    lines: null,
+    plainText: null,
+    resolution: {
+      status: 'not_found',
+      confidence: 'low',
+      score: 0,
+      title: metadata.primaryTitle,
+      artist: metadata.artistHints.join(', '),
+      variant: metadata.variant.type,
+      reasons: []
     }
-    return null;
   };
 
   try {
-    // Build exact-match URL with optional duration for better matching
-    let exactUrl = `https://lrclib.net/api/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(cleanTitle)}`;
-    if (duration && duration > 0) {
-      exactUrl += `&duration=${Math.round(duration)}`;
+    const queries = buildLookupQueries(metadata);
+    const primaryQuery = queries[0] || metadata.primaryTitle || title;
+    const fallbackQuery = queries[1];
+
+    const requests = [];
+
+    // Exact /api/get is only used when we have a trustworthy artist hint.
+    // On normal YouTube, the channel is an uploader and must not be sent as artist.
+    if (metadata.artistHints.length && metadata.primaryTitle) {
+      let exactUrl = `https://lrclib.net/api/get?artist_name=${encodeURIComponent(metadata.artistHints.join(', '))}&track_name=${encodeURIComponent(metadata.primaryTitle)}`;
+      if (duration && duration > 0) {
+        exactUrl += `&duration=${Math.round(duration)}`;
+      }
+      requests.push(fetch(exactUrl, { headers }));
     }
 
-    // Fire exact match and fuzzy search in parallel for speed
-    const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(artist + ' ' + cleanTitle)}`;
+    if (primaryQuery) {
+      requests.push(fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(primaryQuery)}`, { headers }));
+    }
 
-    const [exactRes, searchRes] = await Promise.allSettled([
-      fetch(exactUrl, { headers }),
-      fetch(searchUrl, { headers })
-    ]);
+    const responses = await Promise.allSettled(requests);
+    const candidates = [];
 
-    // Try exact match first
-    if (exactRes.status === 'fulfilled' && exactRes.value.ok) {
-      const data = await exactRes.value.json();
-      const processed = processData(data);
+    for (const response of responses) {
+      if (response.status !== 'fulfilled' || !response.value.ok) continue;
+      const data = await response.value.json();
+      if (Array.isArray(data)) {
+        candidates.push(...data);
+      } else if (data && typeof data === 'object') {
+        candidates.push(data);
+      }
+    }
+
+    let ranked = rankLyricsCandidates(candidates, metadata);
+    let resolution = makeResolution(metadata, ranked);
+
+    // One additional search only when the first pass is not confident enough.
+    // This keeps V2 lightweight while preserving a useful fallback.
+    if ((resolution.confidence === 'low' || !ranked.best) && fallbackQuery && fallbackQuery !== primaryQuery) {
+      const fallbackResponse = await fetch(
+        `https://lrclib.net/api/search?q=${encodeURIComponent(fallbackQuery)}`,
+        { headers }
+      );
+
+      if (fallbackResponse.ok) {
+        const fallbackData = await fallbackResponse.json();
+        if (Array.isArray(fallbackData)) {
+          candidates.push(...fallbackData);
+          ranked = rankLyricsCandidates(candidates, metadata);
+          resolution = makeResolution(metadata, ranked);
+        }
+      }
+    }
+
+    if (ranked.best && resolution.confidence !== 'low') {
+      const processed = processLyricsData(ranked.best.entry, resolution);
       if (processed) result = processed;
-    }
-
-    // Check fuzzy search results — always check if we don't have synced yet
-    if (result.type !== 'synced' && searchRes.status === 'fulfilled' && searchRes.value.ok) {
-      const searchData = await searchRes.value.json();
-      if (searchData && searchData.length > 0) {
-        // Score results: prefer synced lyrics and closest duration match
-        const bestMatch = scoreLyricsResults(searchData, duration);
-
-        if (bestMatch) {
-          const processed = processData(bestMatch);
-          // Only upgrade: synced always wins, or use if we had nothing
-          if (processed && (processed.type === 'synced' || result.type === 'not_found')) {
-            result = processed;
-          }
-        }
-      }
-    }
-
-    // If still no synced lyrics and title differs from cleaned, try original title
-    if (result.type !== 'synced' && cleanTitle !== title) {
-      const fallbackUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(artist + ' ' + title)}`;
-      const fallbackRes = await fetch(fallbackUrl, { headers });
-      if (fallbackRes.ok) {
-        const fallbackData = await fallbackRes.json();
-        if (fallbackData && fallbackData.length > 0) {
-          // Pick the best synced result from the fallback too
-          const bestMatch = scoreLyricsResults(fallbackData, duration);
-
-          if (bestMatch) {
-            const processed = processData(bestMatch);
-            if (processed && (processed.type === 'synced' || result.type === 'not_found')) {
-              result = processed;
-            }
-          }
-        }
-      }
+    } else {
+      // Conservative fallback: do not display lyrics from a weak identity match.
+      result = {
+        type: 'not_found',
+        lines: null,
+        plainText: null,
+        resolution
+      };
     }
   } catch (err) {
     console.error('[Lyrically] Lyrics fetch failed:', err);
+    result = {
+      type: 'not_found',
+      lines: null,
+      plainText: null,
+      resolution: {
+        ...result.resolution,
+        status: 'error'
+      }
+    };
   }
 
-  // Cache results — shorter TTL for not_found so we retry sooner
   const ttl = result.type === 'not_found'
-    ? 1 * 60 * 60 * 1000    // 1 hour for not_found (retry sooner)
-    : 7 * 24 * 60 * 60 * 1000; // 7 days for successful results
+    ? 1 * 60 * 60 * 1000
+    : 7 * 24 * 60 * 60 * 1000;
 
   try {
     await chrome.storage.local.set({
@@ -333,7 +331,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   // ── NOW_PLAYING: detector content script reporting track info ──
   if (msg.type === 'NOW_PLAYING') {
-    const { title, artist, currentTime, duration, isPlaying } = msg.payload;
+    const { title, artist, platform = 'youtube', currentTime, duration, isPlaying } = msg.payload;
 
     // Ignore empty detections
     if (!title && !artist) return false;
@@ -352,7 +350,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     currentState.currentTime = currentTime || 0;
 
     // Check if the track changed
-    const lookupKey = `${(artist || '').toLowerCase()}::${(title || '').toLowerCase()}`;
+    const lookupKey = `${platform}::${normalizeText(artist || '')}::${normalizeText(title || '')}`;
 
     if (lookupKey !== lastLookupKey) {
       // New track — fetch lyrics
@@ -368,7 +366,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // Async lyrics fetch (debounced to respect rate limits)
       if (fetchTimeout) clearTimeout(fetchTimeout);
       fetchTimeout = setTimeout(() => {
-        fetchLyrics(artist || '', title || '', duration || 0).then(result => {
+        fetchLyrics(artist || '', title || '', duration || 0, platform).then(result => {
           // Guard: only apply if still the same track
           if (lastLookupKey === lookupKey) {
             currentState.lyrics = result;
@@ -394,23 +392,29 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 chrome.commands.onCommand.addListener(async (command) => {
   if (command === 'toggle_overlay') {
-    const data = await chrome.storage.local.get(['lyrically:overlay:visible']);
-    const isVisible = data['lyrically:overlay:visible'] !== false;
-    
-    if (!isVisible) {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || tab.url.startsWith('chrome://')) return;
+
+      let overlayState = null;
       try {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tab && !tab.url.startsWith('chrome://')) {
-          await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            files: ['content/overlay.js']
-          });
-        }
-      } catch (e) {
-        console.warn('[Lyrically] Could not inject overlay via shortcut:', e);
+        overlayState = await chrome.tabs.sendMessage(tab.id, { type: 'PING_OVERLAY' });
+      } catch(e) {}
+
+      if (!overlayState || !overlayState.injected) {
+        // Not injected on this tab yet. Inject it and ensure visibility is ON.
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['content/overlay.js']
+        });
+        chrome.storage.local.set({ 'lyrically:overlay:visible': true });
+      } else {
+        // Already injected. Toggle it off if visible, on if hidden.
+        chrome.storage.local.set({ 'lyrically:overlay:visible': !overlayState.visible });
       }
+    } catch (e) {
+      console.warn('[Lyrically] Could not toggle overlay via shortcut:', e);
     }
-    chrome.storage.local.set({ 'lyrically:overlay:visible': !isVisible });
   }
 });
 

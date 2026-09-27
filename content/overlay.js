@@ -593,7 +593,12 @@
   }
 
   // ── Message listener ───────────────────────────────────────────────────────
-  chrome.runtime.onMessage.addListener((msg) => {
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    if (msg.type === 'PING_OVERLAY') {
+      sendResponse({ injected: true, visible: state.visible });
+      return true;
+    }
+
     if (msg.type === 'POSITION_UPDATE') {
       state.currentTime = msg.payload.currentTime;
       if (state.lyrics?.type === 'synced') {

@@ -1,6 +1,6 @@
 (function() {
   'use strict';
-  
+
   const activeAdapter = window.__lyricallyAdapter;
   if (!activeAdapter) {
     return;
@@ -36,6 +36,7 @@
         lastUrl = location.href;
         lastSentKey = '';
       }
+
       const track = activeAdapter.getTrack();
       const currentTime = activeAdapter.getPlaybackPosition();
       const isPlaying = activeAdapter.getPlaybackState();
@@ -59,6 +60,7 @@
           payload: {
             title: track.title,
             artist: track.artist,
+            platform: activeAdapter.platform,
             currentTime,
             duration,
             isPlaying
