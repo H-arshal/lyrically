@@ -35,3 +35,5 @@ pnpm-debug.log*
 # Markdown docs
 *.md
 !README.md
+
+updates/
